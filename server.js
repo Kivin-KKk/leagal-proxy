@@ -12,7 +12,6 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
 
 app.use(cors({
   origin: (origin, cb) => {
-    // 允許無 origin（如 curl）或白名單內的網域
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     cb(new Error(`CORS blocked: ${origin}`));
   },
@@ -28,8 +27,6 @@ app.get("/", (_, res) => res.json({ status: "ok", service: "Taiwan Legal API Pro
 // ════════════════════════════════════════════════════════════════
 const FJUD_BASE = "https://judgment.judicial.gov.tw/FJUD/api";
 
-// 搜尋裁判書
-// GET /api/judgment/search?q=過失&court=TPS&jtype=M&page=1
 app.get("/api/judgment/search", async (req, res) => {
   try {
     const { q, court, jtype, page = 1 } = req.query;
@@ -55,8 +52,6 @@ app.get("/api/judgment/search", async (req, res) => {
   }
 });
 
-// 取得單一裁判書全文
-// GET /api/judgment/detail?jid=XXXXX
 app.get("/api/judgment/detail", async (req, res) => {
   try {
     const { jid } = req.query;
@@ -83,8 +78,6 @@ app.get("/api/judgment/detail", async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 const LAW_BASE = "https://law.moj.gov.tw/api/CH";
 
-// 搜尋法律
-// GET /api/law/search?kw=刑法
 app.get("/api/law/search", async (req, res) => {
   try {
     const { kw } = req.query;
@@ -107,8 +100,6 @@ app.get("/api/law/search", async (req, res) => {
   }
 });
 
-// 取得法律條文
-// GET /api/law/articles?pcode=C0000001
 app.get("/api/law/articles", async (req, res) => {
   try {
     const { pcode } = req.query;
