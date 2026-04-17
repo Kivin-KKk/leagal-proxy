@@ -76,7 +76,7 @@ app.get("/api/judgment/detail", async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 // 全國法規資料庫 API
 // ════════════════════════════════════════════════════════════════
-const LAW_BASE = "https://law.moj.gov.tw/api/CH";
+const LAW_BASE = "https://law.moj.gov.tw/LawClass";
 
 app.get("/api/law/search", async (req, res) => {
   try {
