@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: taiwan-legal-proxy
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://你的前端網址.netlify.app
