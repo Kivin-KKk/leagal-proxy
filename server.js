@@ -73,70 +73,51 @@ app.get("/api/law/search", async (req, res) => {
   }
 });
 
-// ── 條文查詢（全國法規資料庫官方 Open API）────────────────────────
+// ── 條文查詢（使用全國法規資料庫 XML API 解析）────────────────────
 app.get("/api/law/articles", async (req, res) => {
   try {
     const { pcode } = req.query;
     if (!pcode) return res.status(400).json({ error: "缺少 pcode 參數" });
 
-    // 全國法規資料庫 Open API 正確格式
-    const url = `https://law.moj.gov.tw/api/Ch/Law/JSON`;
-    const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" }
-    });
-
-    if (!r.ok) return res.status(r.status).json({ error: `法規 API 錯誤 ${r.status}` });
-
-    // 這個 API 回傳的是 ZIP 檔，改用網頁版解析
-    // 直接抓全國法規資料庫的 JSON API（新版）
-    const apiUrl = `https://law.moj.gov.tw/api/ch/Laws/${pcode}`;
-    const apiRes = await fetch(apiUrl, {
-      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" }
-    });
-
-    if (apiRes.ok) {
-      const data = await apiRes.json();
-      const rawArticles = data?.LawArticles?.LawArticle || data?.Articles || [];
-      const articles = rawArticles.map(a => ({
-        ArticleNo: a.ArticleNo || a.articleNo || "",
-        ArticleContent: a.ArticleContent || a.articleContent || "",
-      })).filter(a => a.ArticleNo);
-      if (articles.length > 0) return res.json({ Articles: articles });
-    }
-
-    // 備用：抓法規網頁 HTML 解析
-    const htmlUrl = `https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=${pcode}`;
-    const htmlRes = await fetch(htmlUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/html",
-        "Accept-Language": "zh-TW,zh",
+    // 使用官方 XML API 下載整部法規
+    const xmlUrl = `https://law.moj.gov.tw/api/Ch/Law/XML`;
+    // 改用直接下載單一法規 XML
+    const singleUrl = `https://law.moj.gov.tw/LawClass/LawGetFile.ashx?FileType=XML&FLNO=&Pcode=${pcode}`;
+    
+    const r = await fetch(singleUrl, {
+      headers: { 
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/xml, text/xml, */*",
+        "Referer": "https://law.moj.gov.tw/"
       }
     });
 
-    if (!htmlRes.ok) return res.status(404).json({ error: "找不到該法規" });
+    if (!r.ok) return res.status(r.status).json({ error: `法規下載失敗 ${r.status}` });
 
-    const html = await htmlRes.text();
+    const xml = await r.text();
     const articles = [];
 
-    // 解析條號與條文
-    const matches = html.matchAll(/id="A(\d+[_\d]*)"[\s\S]*?<div[^>]*class="[^"]*law-article[^"]*"[^>]*>([\s\S]*?)<\/div>/gi);
-    for (const m of matches) {
-      const content = m[2].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
-      if (content) articles.push({ ArticleNo: m[1].replace(/_/g, "-"), ArticleContent: content });
+    // 解析 XML 中的條文
+    // 格式：<Article><ArticleNo>1</ArticleNo><ArticleContent>...</ArticleContent></Article>
+    const artRegex = /<Article>([\s\S]*?)<\/Article>/gi;
+    let match;
+    while ((match = artRegex.exec(xml)) !== null) {
+      const block = match[1];
+      const noMatch = block.match(/<ArticleNo>([\s\S]*?)<\/ArticleNo>/i);
+      const contentMatch = block.match(/<ArticleContent>([\s\S]*?)<\/ArticleContent>/i);
+      if (noMatch && contentMatch) {
+        const content = contentMatch[1]
+          .replace(/<!\[CDATA\[|\]\]>/g, "")
+          .replace(/<[^>]+>/g, "")
+          .trim();
+        articles.push({
+          ArticleNo: noMatch[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim(),
+          ArticleContent: content,
+        });
+      }
     }
 
     if (articles.length > 0) return res.json({ Articles: articles });
-
-    // 最終備用：正規表達式找條文
-    const artMatches = html.matchAll(/第\s*(\d+(?:-\d+)?)\s*條[^】]*?>([\s\S]{10,500}?)(?=第\s*\d+\s*條|$)/gi);
-    const arts2 = [];
-    for (const m of artMatches) {
-      const content = m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-      if (content.length > 5) arts2.push({ ArticleNo: m[1], ArticleContent: content });
-    }
-
-    if (arts2.length > 0) return res.json({ Articles: arts2 });
 
     return res.status(404).json({ error: "無法解析條文，請直接前往 law.moj.gov.tw 查詢" });
 
