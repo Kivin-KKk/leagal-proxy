@@ -38,7 +38,7 @@ app.get("/api/judgment/search", async (req, res) => {
   }
 });
 
-// ── 內建法規索引（常用法律）────────────────────────────────────────
+// ── 內建法規索引 ──────────────────────────────────────────────────
 const BUILTIN_LAWS = [
   { LawName: "中華民國刑法", PCode: "C0000001", LawCategory: "刑事", LawLevel: "法律" },
   { LawName: "刑事訴訟法", PCode: "C0010001", LawCategory: "刑事", LawLevel: "法律" },
@@ -62,7 +62,6 @@ const BUILTIN_LAWS = [
   { LawName: "道路交通管理處罰條例", PCode: "D0080022", LawCategory: "行政", LawLevel: "法律" },
 ];
 
-// 搜尋法律名稱（內建資料）
 app.get("/api/law/search", async (req, res) => {
   try {
     const { kw } = req.query;
@@ -74,52 +73,70 @@ app.get("/api/law/search", async (req, res) => {
   }
 });
 
-// 取得法律條文（從全國法規資料庫官網抓 HTML 解析）
+// ── 條文查詢（全國法規資料庫官方 Open API）────────────────────────
 app.get("/api/law/articles", async (req, res) => {
   try {
     const { pcode } = req.query;
     if (!pcode) return res.status(400).json({ error: "缺少 pcode 參數" });
 
-    // 使用全國法規資料庫的公開 API 格式
-    const url = `https://law.moj.gov.tw/api/ch/laws/${pcode}/articles`;
+    // 全國法規資料庫 Open API 正確格式
+    const url = `https://law.moj.gov.tw/api/Ch/Law/JSON`;
     const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" }
+    });
+
+    if (!r.ok) return res.status(r.status).json({ error: `法規 API 錯誤 ${r.status}` });
+
+    // 這個 API 回傳的是 ZIP 檔，改用網頁版解析
+    // 直接抓全國法規資料庫的 JSON API（新版）
+    const apiUrl = `https://law.moj.gov.tw/api/ch/Laws/${pcode}`;
+    const apiRes = await fetch(apiUrl, {
       headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" }
     });
 
-    if (r.ok) {
-      const data = await r.json();
-      const articles = (data.Articles || data.articles || []).map(a => ({
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      const rawArticles = data?.LawArticles?.LawArticle || data?.Articles || [];
+      const articles = rawArticles.map(a => ({
         ArticleNo: a.ArticleNo || a.articleNo || "",
         ArticleContent: a.ArticleContent || a.articleContent || "",
-      }));
-      return res.json({ Articles: articles });
+      })).filter(a => a.ArticleNo);
+      if (articles.length > 0) return res.json({ Articles: articles });
     }
 
-    // 備用：從網頁版解析
+    // 備用：抓法規網頁 HTML 解析
     const htmlUrl = `https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=${pcode}`;
     const htmlRes = await fetch(htmlUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" }
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "zh-TW,zh",
+      }
     });
 
     if (!htmlRes.ok) return res.status(404).json({ error: "找不到該法規" });
 
     const html = await htmlRes.text();
-
-    // 解析 HTML 中的條文
     const articles = [];
-    const regex = /第\s*(\S+)\s*條[\s\S]*?(<td[^>]*class="[^"]*law-article[^"]*"[^>]*>[\s\S]*?<\/td>)/gi;
-    let match;
 
-    // 簡易解析：找出條號和內容
-    const artRegex = /data-no="([^"]+)"[^>]*>[\s\S]*?<div[^>]*>([\s\S]*?)<\/div>/gi;
-    while ((match = artRegex.exec(html)) !== null) {
-      articles.push({
-        ArticleNo: match[1].trim(),
-        ArticleContent: match[2].replace(/<[^>]+>/g, "").trim(),
-      });
+    // 解析條號與條文
+    const matches = html.matchAll(/id="A(\d+[_\d]*)"[\s\S]*?<div[^>]*class="[^"]*law-article[^"]*"[^>]*>([\s\S]*?)<\/div>/gi);
+    for (const m of matches) {
+      const content = m[2].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+      if (content) articles.push({ ArticleNo: m[1].replace(/_/g, "-"), ArticleContent: content });
     }
 
     if (articles.length > 0) return res.json({ Articles: articles });
+
+    // 最終備用：正規表達式找條文
+    const artMatches = html.matchAll(/第\s*(\d+(?:-\d+)?)\s*條[^】]*?>([\s\S]{10,500}?)(?=第\s*\d+\s*條|$)/gi);
+    const arts2 = [];
+    for (const m of artMatches) {
+      const content = m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      if (content.length > 5) arts2.push({ ArticleNo: m[1], ArticleContent: content });
+    }
+
+    if (arts2.length > 0) return res.json({ Articles: arts2 });
 
     return res.status(404).json({ error: "無法解析條文，請直接前往 law.moj.gov.tw 查詢" });
 
