@@ -104,3 +104,4 @@ app.listen(PORT, () => {
   console.log(`✓ Legal Proxy running on port ${PORT}`);
   console.log(`  Allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
 });
+ 
