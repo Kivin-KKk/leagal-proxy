@@ -62,6 +62,9 @@ const BUILTIN_LAWS = [
   { LawName: "道路交通管理處罰條例", PCode: "D0080022", LawCategory: "行政", LawLevel: "法律" },
 ];
 
+// 快取
+const articleCache = {};
+
 app.get("/api/law/search", async (req, res) => {
   try {
     const { kw } = req.query;
@@ -73,53 +76,69 @@ app.get("/api/law/search", async (req, res) => {
   }
 });
 
-// ── 條文查詢（使用全國法規資料庫 XML API 解析）────────────────────
+// ── 條文查詢（使用 jsdelivr CDN 取得 mojLawSplitJSON 資料）────────
 app.get("/api/law/articles", async (req, res) => {
   try {
     const { pcode } = req.query;
     if (!pcode) return res.status(400).json({ error: "缺少 pcode 參數" });
 
-    // 使用官方 XML API 下載整部法規
-    const xmlUrl = `https://law.moj.gov.tw/api/Ch/Law/XML`;
-    // 改用直接下載單一法規 XML
-    const singleUrl = `https://law.moj.gov.tw/LawClass/LawGetFile.ashx?FileType=XML&FLNO=&Pcode=${pcode}`;
-    
-    const r = await fetch(singleUrl, {
-      headers: { 
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/xml, text/xml, */*",
-        "Referer": "https://law.moj.gov.tw/"
-      }
-    });
-
-    if (!r.ok) return res.status(r.status).json({ error: `法規下載失敗 ${r.status}` });
-
-    const xml = await r.text();
-    const articles = [];
-
-    // 解析 XML 中的條文
-    // 格式：<Article><ArticleNo>1</ArticleNo><ArticleContent>...</ArticleContent></Article>
-    const artRegex = /<Article>([\s\S]*?)<\/Article>/gi;
-    let match;
-    while ((match = artRegex.exec(xml)) !== null) {
-      const block = match[1];
-      const noMatch = block.match(/<ArticleNo>([\s\S]*?)<\/ArticleNo>/i);
-      const contentMatch = block.match(/<ArticleContent>([\s\S]*?)<\/ArticleContent>/i);
-      if (noMatch && contentMatch) {
-        const content = contentMatch[1]
-          .replace(/<!\[CDATA\[|\]\]>/g, "")
-          .replace(/<[^>]+>/g, "")
-          .trim();
-        articles.push({
-          ArticleNo: noMatch[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim(),
-          ArticleContent: content,
-        });
-      }
+    // 使用快取
+    if (articleCache[pcode]) {
+      return res.json({ Articles: articleCache[pcode] });
     }
 
-    if (articles.length > 0) return res.json({ Articles: articles });
+    // jsdelivr 可以直接存取 GitHub 上的檔案，不受 CORS 限制
+    const urls = [
+      `https://cdn.jsdelivr.net/gh/kong0107/mojLawSplitJSON@main/FalVMingLing/${pcode}.json`,
+      `https://cdn.jsdelivr.net/gh/kong0107/mojLawSplitJSON@arranged/FalVMingLing/${pcode}.json`,
+    ];
 
-    return res.status(404).json({ error: "無法解析條文，請直接前往 law.moj.gov.tw 查詢" });
+    let data = null;
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          timeout: 10000,
+        });
+        if (r.ok) { data = await r.json(); break; }
+      } catch {}
+    }
+
+    if (!data) return res.status(404).json({ error: "找不到該法規條文" });
+
+    // 解析條文（支援多種格式）
+    let articles = [];
+
+    if (Array.isArray(data.法規內容)) {
+      for (const item of data.法規內容) {
+        if (item.條號 && item.條文內容) {
+          articles.push({
+            ArticleNo: String(item.條號),
+            ArticleContent: item.條文內容,
+          });
+        }
+      }
+    } else if (Array.isArray(data.articles)) {
+      articles = data.articles.map(a => ({
+        ArticleNo: String(a.number || a.ArticleNo || ""),
+        ArticleContent: a.content || a.ArticleContent || "",
+      }));
+    } else if (Array.isArray(data)) {
+      articles = data
+        .filter(a => a.ArticleNo || a.條號)
+        .map(a => ({
+          ArticleNo: String(a.ArticleNo || a.條號 || ""),
+          ArticleContent: a.ArticleContent || a.條文內容 || "",
+        }));
+    }
+
+    if (articles.length === 0) {
+      return res.status(404).json({ error: "無法解析條文格式" });
+    }
+
+    // 存入快取
+    articleCache[pcode] = articles;
+    res.json({ Articles: articles });
 
   } catch (err) {
     res.status(502).json({ error: "無法取得條文", detail: err.message });
